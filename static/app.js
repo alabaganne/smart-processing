@@ -1,8 +1,14 @@
 // Smart Document Transformation - Frontend Application
+// Supports async processing with real-time progress updates via SSE
 
 let currentMode = 'single';
 let pairCount = 1;
 let lastResult = null;
+let currentEventSource = null;  // Track SSE connection
+
+// Configuration
+const USE_ASYNC = true;  // Use async processing for large documents
+const LARGE_FILE_THRESHOLD = 50000;  // 50KB - use async for files larger than this
 
 function setMode(mode) {
     currentMode = mode;
@@ -47,6 +53,174 @@ function removeExamplePair(pairNum) {
     if (pair) pair.remove();
 }
 
+// Progress UI functions
+function showProgress() {
+    const progressContainer = document.getElementById('progressContainer');
+    if (progressContainer) {
+        progressContainer.classList.add('visible');
+    }
+}
+
+function hideProgress() {
+    const progressContainer = document.getElementById('progressContainer');
+    if (progressContainer) {
+        progressContainer.classList.remove('visible');
+    }
+}
+
+function updateProgress(progress, message, currentChunk = null, totalChunks = null) {
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const chunkInfo = document.getElementById('chunkInfo');
+
+    if (progressBar) {
+        progressBar.style.width = `${progress}%`;
+        progressBar.setAttribute('aria-valuenow', progress);
+    }
+
+    if (progressText) {
+        progressText.textContent = message || `Processing... ${progress}%`;
+    }
+
+    if (chunkInfo && currentChunk !== null && totalChunks !== null && totalChunks > 1) {
+        chunkInfo.textContent = `Chunk ${currentChunk} of ${totalChunks}`;
+        chunkInfo.style.display = 'block';
+    } else if (chunkInfo) {
+        chunkInfo.style.display = 'none';
+    }
+}
+
+function updatePartialResult(preview) {
+    const partialResult = document.getElementById('partialResult');
+    if (partialResult && preview) {
+        partialResult.textContent = preview;
+        partialResult.parentElement.style.display = 'block';
+    }
+}
+
+// Check if file is large enough to warrant async processing
+function shouldUseAsync(files) {
+    if (!USE_ASYNC) return false;
+
+    for (const file of files) {
+        if (file && file.size > LARGE_FILE_THRESHOLD) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Close any existing SSE connection
+function closeEventSource() {
+    if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+    }
+}
+
+// Handle async transformation with SSE
+async function handleAsyncTransformation(formData, endpoint) {
+    const submitBtn = document.getElementById('submitBtn');
+    const loading = document.getElementById('loading');
+    const error = document.getElementById('error');
+    const results = document.getElementById('results');
+
+    try {
+        // Start the async job
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to start transformation');
+        }
+
+        const jobInfo = await response.json();
+        const jobId = jobInfo.job_id;
+
+        // Show progress UI
+        loading.classList.remove('visible');
+        showProgress();
+        updateProgress(0, 'Starting transformation...', 0, jobInfo.total_chunks);
+
+        // Connect to SSE stream
+        return new Promise((resolve, reject) => {
+            closeEventSource();
+            currentEventSource = new EventSource(`/jobs/${jobId}/stream`);
+
+            currentEventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                // Update progress
+                updateProgress(
+                    data.progress,
+                    data.message,
+                    data.current_chunk,
+                    data.total_chunks
+                );
+
+                // Show partial result if available
+                if (data.partial_result_preview) {
+                    updatePartialResult(data.partial_result_preview);
+                }
+
+                // Check if job is complete
+                if (data.final) {
+                    closeEventSource();
+                    hideProgress();
+
+                    if (data.status === 'completed') {
+                        // Fetch the full result
+                        fetchJobResult(jobId).then(resolve).catch(reject);
+                    } else {
+                        reject(new Error(data.error || 'Transformation failed'));
+                    }
+                }
+            };
+
+            currentEventSource.onerror = (err) => {
+                closeEventSource();
+                hideProgress();
+
+                // Try to fetch result anyway (job might have completed)
+                fetchJobResult(jobId)
+                    .then(resolve)
+                    .catch(() => reject(new Error('Connection lost. Please check job status.')));
+            };
+        });
+
+    } catch (err) {
+        hideProgress();
+        throw err;
+    }
+}
+
+// Fetch completed job result
+async function fetchJobResult(jobId) {
+    const response = await fetch(`/jobs/${jobId}`);
+    if (!response.ok) {
+        throw new Error('Failed to fetch job result');
+    }
+    return response.json();
+}
+
+// Handle synchronous transformation (original behavior)
+async function handleSyncTransformation(formData, endpoint) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Transformation failed');
+    }
+
+    return response.json();
+}
+
 document.getElementById('transformForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -59,6 +233,7 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
     loading.classList.add('visible');
     error.classList.remove('visible');
     results.classList.remove('visible');
+    hideProgress();
 
     try {
         const formData = new FormData();
@@ -71,9 +246,10 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
         formData.append('new_document', newDocument);
 
         let endpoint;
+        let useAsync = false;
+        const filesToCheck = [newDocument];
 
         if (currentMode === 'single') {
-            endpoint = '/transform';
             const exampleInput = document.querySelector('#singleExampleCard input[name="example_input"]').files[0];
             const exampleOutput = document.querySelector('#singleExampleCard input[name="example_output"]').files[0];
 
@@ -83,6 +259,12 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
 
             formData.append('example_input', exampleInput);
             formData.append('example_output', exampleOutput);
+            filesToCheck.push(exampleInput, exampleOutput);
+
+            // Determine endpoint based on file size
+            useAsync = shouldUseAsync(filesToCheck);
+            endpoint = useAsync ? '/transform-async' : '/transform';
+
         } else {
             endpoint = '/transform-multi';
             const inputs = document.querySelectorAll('#multiExampleCard input[name="example_inputs"]');
@@ -93,6 +275,7 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
                 if (input.files[0] && outputs[i]?.files[0]) {
                     formData.append('example_inputs', input.files[0]);
                     formData.append('example_outputs', outputs[i].files[0]);
+                    filesToCheck.push(input.files[0], outputs[i].files[0]);
                     hasValidPair = true;
                 }
             });
@@ -100,19 +283,18 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
             if (!hasValidPair) {
                 throw new Error('Please provide at least one complete example pair');
             }
+
+            // Multi-example doesn't have async endpoint yet, use sync
+            useAsync = false;
         }
 
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Transformation failed');
+        let result;
+        if (useAsync) {
+            result = await handleAsyncTransformation(formData, endpoint);
+        } else {
+            result = await handleSyncTransformation(formData, endpoint);
         }
 
-        const result = await response.json();
         lastResult = result;
 
         // Display job ID
@@ -128,6 +310,7 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
             <div class="metadata-item">Output Length: <span>${metadata.output_length.toLocaleString()}</span></div>
             ${metadata.chunks_processed > 1 ? `<div class="metadata-item">Chunks: <span>${metadata.chunks_processed}</span></div>` : ''}
             ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
+            ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
         `;
 
         results.classList.add('visible');
@@ -142,13 +325,18 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
     } finally {
         submitBtn.disabled = false;
         loading.classList.remove('visible');
+        hideProgress();
     }
 });
 
 function copyToClipboard(elementId) {
     const text = document.getElementById(elementId).textContent;
     navigator.clipboard.writeText(text).then(() => {
-        // Could add a toast notification here
+        // Show brief feedback
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = originalText, 1500);
     });
 }
 
@@ -189,6 +377,7 @@ async function loadHistory() {
                 </div>
                 <div>
                     <span class="history-item-type">${job.metadata?.transformation_type || job.type}</span>
+                    ${job.type === 'async' ? '<span class="history-item-badge">async</span>' : ''}
                 </div>
             </div>
         `).join('');
@@ -225,6 +414,7 @@ async function viewJob(jobId) {
             <div class="metadata-item">Output Length: <span>${metadata.output_length.toLocaleString()}</span></div>
             ${metadata.chunks_processed > 1 ? `<div class="metadata-item">Chunks: <span>${metadata.chunks_processed}</span></div>` : ''}
             ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
+            ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
         `;
 
         error.classList.remove('visible');
@@ -236,6 +426,11 @@ async function viewJob(jobId) {
         error.classList.add('visible');
     }
 }
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    closeEventSource();
+});
 
 // Load history on page load
 document.addEventListener('DOMContentLoaded', loadHistory);
