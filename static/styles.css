@@ -506,19 +506,120 @@ h1 {
 }
 
 /* ============================================================================
-   View Toggle Styles
+   Active Jobs Panel (Parallel Processing)
    ============================================================================ */
 
-.view-toggle {
+.active-jobs-card {
+    border-color: rgba(102, 126, 234, 0.3);
+    background: rgba(102, 126, 234, 0.05);
+}
+
+.active-jobs-card h2 {
     display: flex;
-    gap: 0.5rem;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.active-jobs-count {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 0.25rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.active-jobs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.active-job-item {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid #667eea;
+}
+
+.active-job-item.success {
+    border-left-color: #22c55e;
+}
+
+.active-job-item.error {
+    border-left-color: #ef4444;
+}
+
+.job-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.job-filename {
+    font-weight: 500;
+    color: #e4e4e7;
+    font-size: 0.9rem;
+}
+
+.job-status {
+    font-size: 0.8rem;
+    color: #a1a1aa;
+}
+
+.job-progress-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.job-progress-fill {
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.active-job-item.success .job-progress-fill {
+    background: #22c55e;
+}
+
+.view-job-btn {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.1);
+    color: #22c55e;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s ease;
+}
+
+.view-job-btn:hover {
+    background: rgba(34, 197, 94, 0.2);
+}
+
+/* ============================================================================
+   Document Tabs (Before/After/Changes)
+   ============================================================================ */
+
+.document-tabs {
+    margin-bottom: 1.5rem;
+}
+
+.tabs-header {
+    display: flex;
+    gap: 0.25rem;
     margin-bottom: 1rem;
     padding: 0.25rem;
     background: rgba(0, 0, 0, 0.2);
     border-radius: 10px;
 }
 
-.view-btn {
+.tab-btn {
     flex: 1;
     padding: 0.6rem 1rem;
     border: none;
@@ -531,15 +632,44 @@ h1 {
     transition: all 0.2s ease;
 }
 
-.view-btn.active {
+.tab-btn.active {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
-.view-btn:hover:not(.active) {
+.tab-btn:hover:not(.active) {
     background: rgba(255, 255, 255, 0.05);
     color: #e4e4e7;
+}
+
+.diff-stats-bar {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.tab-content {
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.tab-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.tab-header h3 {
+    font-size: 0.95rem;
+    color: #a1a1aa;
+    margin: 0;
 }
 
 /* ============================================================================
@@ -653,6 +783,7 @@ h1 {
     gap: 1rem;
     font-size: 0.75rem;
     font-weight: 400;
+    color: #a1a1aa;
 }
 
 .legend-item {
@@ -771,7 +902,7 @@ h1 {
         flex-direction: column;
     }
 
-    .view-toggle {
+    .tabs-header {
         flex-direction: column;
     }
 
@@ -779,13 +910,26 @@ h1 {
         flex-direction: column;
     }
 
-    .diff-stats {
+    .diff-stats,
+    .diff-stats-bar {
         flex-direction: column;
         gap: 0.5rem;
     }
 
     .diff-legend {
         flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .job-info {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .tab-header {
+        flex-direction: column;
+        align-items: flex-start;
         gap: 0.5rem;
     }
 }

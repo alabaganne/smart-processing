@@ -1,15 +1,20 @@
 // Smart Document Transformation - Frontend Application
-// Supports async processing with real-time progress updates via SSE
+// Supports true async parallel processing with real-time progress updates via SSE
 
 let currentMode = 'single';
-let currentResultView = 'result';
+let currentDocumentTab = 'before';
 let pairCount = 1;
 let lastResult = null;
-let currentEventSource = null;  // Track SSE connection
+
+// Track multiple active jobs for parallel processing
+const activeJobs = new Map(); // jobId -> { eventSource, status, filename, progress }
 
 // Configuration
-const USE_ASYNC = true;  // Use async processing for large documents
-const LARGE_FILE_THRESHOLD = 50000;  // 50KB - use async for files larger than this
+const USE_ASYNC = true;  // Always use async for parallel support
+
+// ============================================================================
+// Mode Selection
+// ============================================================================
 
 function setMode(mode) {
     currentMode = mode;
@@ -55,69 +60,40 @@ function removeExamplePair(pairNum) {
 }
 
 // ============================================================================
-// Result View Toggle (Result Only vs Comparison)
+// Document Tabs (Before/After/Changes)
 // ============================================================================
 
-function setResultView(view) {
-    currentResultView = view;
-    document.querySelectorAll('.view-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === view);
+function setDocumentTab(tab) {
+    currentDocumentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
     });
 
-    const resultOnlyView = document.getElementById('resultOnlyView');
-    const comparisonView = document.getElementById('comparisonView');
+    document.getElementById('beforeTab').style.display = tab === 'before' ? 'block' : 'none';
+    document.getElementById('afterTab').style.display = tab === 'after' ? 'block' : 'none';
+    document.getElementById('changesTab').style.display = tab === 'changes' ? 'block' : 'none';
 
-    if (view === 'result') {
-        resultOnlyView.style.display = 'block';
-        comparisonView.style.display = 'none';
-    } else {
-        resultOnlyView.style.display = 'none';
-        comparisonView.style.display = 'block';
-        renderComparisonView();
+    // Render changes tab content when selected
+    if (tab === 'changes' && lastResult) {
+        renderChangesTab();
     }
 }
 
-function renderComparisonView() {
+function renderChangesTab() {
     if (!lastResult || !lastResult.diff_data) {
+        document.getElementById('diffContent').innerHTML = '<p class="no-diff">No comparison data available</p>';
         return;
     }
 
     const diffData = lastResult.diff_data;
     const fullChangeNotice = document.getElementById('fullChangeNotice');
-    const sideBySideView = document.getElementById('sideBySideView');
-    const diffView = document.getElementById('diffView');
-    const diffStats = document.getElementById('diffStats');
-
-    // Show similarity stats
-    const similarityPercent = Math.round(diffData.similarity_ratio * 100);
-    diffStats.innerHTML = `
-        <span class="stat-item">Similarity: <strong>${similarityPercent}%</strong></span>
-    `;
+    const diffContent = document.getElementById('diffContent');
 
     if (diffData.is_full_change) {
-        // Full document change - show side by side
         fullChangeNotice.style.display = 'flex';
-        sideBySideView.style.display = 'flex';
-        diffView.style.display = 'none';
-
-        document.getElementById('originalDoc').textContent = lastResult.original_document || '';
-        document.getElementById('transformedDoc').textContent = lastResult.transformed_document || '';
+        diffContent.innerHTML = '<p class="no-diff">Document was fully transformed. Compare using Before/After tabs.</p>';
     } else {
-        // Partial change - show diff with highlighting
         fullChangeNotice.style.display = 'none';
-        sideBySideView.style.display = 'none';
-        diffView.style.display = 'block';
-
-        // Add stats
-        if (diffData.stats) {
-            diffStats.innerHTML += `
-                <span class="stat-item added">+${diffData.stats.lines_added} added</span>
-                <span class="stat-item deleted">-${diffData.stats.lines_deleted} removed</span>
-                ${diffData.stats.lines_modified > 0 ? `<span class="stat-item modified">~${diffData.stats.lines_modified} modified</span>` : ''}
-            `;
-        }
-
-        // Render the diff
         renderLineDiff(diffData.line_diff);
     }
 }
@@ -146,13 +122,11 @@ function renderLineDiff(lineDiff) {
                 break;
 
             case 'replace':
-                // Show old lines as deleted
                 if (op.old && Array.isArray(op.old)) {
                     for (const line of op.old) {
                         html += `<div class="diff-line delete"><span class="line-marker">-</span><span class="line-content">${escapeHtml(line)}</span></div>`;
                     }
                 }
-                // Show new lines as inserted
                 if (op.new && Array.isArray(op.new)) {
                     for (const line of op.new) {
                         html += `<div class="diff-line insert"><span class="line-marker">+</span><span class="line-content">${escapeHtml(line)}</span></div>`;
@@ -173,80 +147,98 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Progress UI functions
-function showProgress() {
-    const progressContainer = document.getElementById('progressContainer');
-    if (progressContainer) {
-        progressContainer.classList.add('visible');
+function updateDiffStats(diffData) {
+    const statsBar = document.getElementById('diffStatsBar');
+    if (!diffData) {
+        statsBar.innerHTML = '';
+        return;
+    }
+
+    const similarityPercent = Math.round(diffData.similarity_ratio * 100);
+    let html = `<span class="stat-item">Similarity: <strong>${similarityPercent}%</strong></span>`;
+
+    if (!diffData.is_full_change && diffData.stats) {
+        html += `
+            <span class="stat-item added">+${diffData.stats.lines_added} added</span>
+            <span class="stat-item deleted">-${diffData.stats.lines_deleted} removed</span>
+            ${diffData.stats.lines_modified > 0 ? `<span class="stat-item modified">~${diffData.stats.lines_modified} modified</span>` : ''}
+        `;
+    }
+
+    statsBar.innerHTML = html;
+}
+
+// ============================================================================
+// Active Jobs Panel (Parallel Processing)
+// ============================================================================
+
+function updateActiveJobsPanel() {
+    const card = document.getElementById('activeJobsCard');
+    const list = document.getElementById('activeJobsList');
+    const count = document.getElementById('activeJobsCount');
+
+    if (activeJobs.size === 0) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+    count.textContent = activeJobs.size;
+
+    let html = '';
+    activeJobs.forEach((job, jobId) => {
+        const statusClass = job.status === 'failed' ? 'error' : job.status === 'completed' ? 'success' : 'processing';
+        html += `
+            <div class="active-job-item ${statusClass}" data-job-id="${jobId}">
+                <div class="job-info">
+                    <span class="job-filename">${escapeHtml(job.filename)}</span>
+                    <span class="job-status">${job.message || job.status}</span>
+                </div>
+                <div class="job-progress-bar">
+                    <div class="job-progress-fill" style="width: ${job.progress}%"></div>
+                </div>
+                ${job.status === 'completed' ? `<button class="view-job-btn" onclick="viewCompletedJob('${jobId}')">View</button>` : ''}
+            </div>
+        `;
+    });
+
+    list.innerHTML = html;
+}
+
+function addActiveJob(jobId, filename) {
+    activeJobs.set(jobId, {
+        eventSource: null,
+        status: 'pending',
+        filename: filename,
+        progress: 0,
+        message: 'Starting...'
+    });
+    updateActiveJobsPanel();
+}
+
+function updateActiveJob(jobId, updates) {
+    const job = activeJobs.get(jobId);
+    if (job) {
+        Object.assign(job, updates);
+        updateActiveJobsPanel();
     }
 }
 
-function hideProgress() {
-    const progressContainer = document.getElementById('progressContainer');
-    if (progressContainer) {
-        progressContainer.classList.remove('visible');
+function removeActiveJob(jobId) {
+    const job = activeJobs.get(jobId);
+    if (job && job.eventSource) {
+        job.eventSource.close();
     }
+    activeJobs.delete(jobId);
+    updateActiveJobsPanel();
 }
 
-function updateProgress(progress, message, currentChunk = null, totalChunks = null) {
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const chunkInfo = document.getElementById('chunkInfo');
+// ============================================================================
+// Async Transformation with Parallel Support
+// ============================================================================
 
-    if (progressBar) {
-        progressBar.style.width = `${progress}%`;
-        progressBar.setAttribute('aria-valuenow', progress);
-    }
-
-    if (progressText) {
-        progressText.textContent = message || `Processing... ${progress}%`;
-    }
-
-    if (chunkInfo && currentChunk !== null && totalChunks !== null && totalChunks > 1) {
-        chunkInfo.textContent = `Chunk ${currentChunk} of ${totalChunks}`;
-        chunkInfo.style.display = 'block';
-    } else if (chunkInfo) {
-        chunkInfo.style.display = 'none';
-    }
-}
-
-function updatePartialResult(preview) {
-    const partialResult = document.getElementById('partialResult');
-    if (partialResult && preview) {
-        partialResult.textContent = preview;
-        partialResult.parentElement.style.display = 'block';
-    }
-}
-
-// Check if file is large enough to warrant async processing
-function shouldUseAsync(files) {
-    if (!USE_ASYNC) return false;
-
-    for (const file of files) {
-        if (file && file.size > LARGE_FILE_THRESHOLD) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Close any existing SSE connection
-function closeEventSource() {
-    if (currentEventSource) {
-        currentEventSource.close();
-        currentEventSource = null;
-    }
-}
-
-// Handle async transformation with SSE
-async function handleAsyncTransformation(formData, endpoint) {
-    const submitBtn = document.getElementById('submitBtn');
-    const loading = document.getElementById('loading');
-    const error = document.getElementById('error');
-    const results = document.getElementById('results');
-
+async function startAsyncTransformation(formData, endpoint, filename) {
     try {
-        // Start the async job
         const response = await fetch(endpoint, {
             method: 'POST',
             body: formData
@@ -260,100 +252,78 @@ async function handleAsyncTransformation(formData, endpoint) {
         const jobInfo = await response.json();
         const jobId = jobInfo.job_id;
 
-        // Show progress UI
-        loading.classList.remove('visible');
-        showProgress();
-        updateProgress(0, 'Starting transformation...', 0, jobInfo.total_chunks);
+        // Add to active jobs
+        addActiveJob(jobId, filename);
 
         // Connect to SSE stream
-        return new Promise((resolve, reject) => {
-            closeEventSource();
-            currentEventSource = new EventSource(`/jobs/${jobId}/stream`);
+        const eventSource = new EventSource(`/jobs/${jobId}/stream`);
 
-            currentEventSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+        const job = activeJobs.get(jobId);
+        if (job) {
+            job.eventSource = eventSource;
+        }
 
-                // Update progress
-                updateProgress(
-                    data.progress,
-                    data.message,
-                    data.current_chunk,
-                    data.total_chunks
-                );
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
 
-                // Show partial result if available
-                if (data.partial_result_preview) {
-                    updatePartialResult(data.partial_result_preview);
-                }
+            updateActiveJob(jobId, {
+                status: data.status,
+                progress: data.progress,
+                message: data.message
+            });
 
-                // Check if job is complete
-                if (data.final) {
-                    closeEventSource();
-                    hideProgress();
+            if (data.final) {
+                eventSource.close();
 
-                    if (data.status === 'completed') {
-                        // Fetch the full result
-                        fetchJobResult(jobId).then(resolve).catch(reject);
-                    } else {
-                        reject(new Error(data.error || 'Transformation failed'));
+                if (data.status === 'completed') {
+                    updateActiveJob(jobId, { status: 'completed', message: 'Completed!' });
+                    // Auto-load the first completed job
+                    if (!lastResult) {
+                        viewCompletedJob(jobId);
                     }
+                } else {
+                    updateActiveJob(jobId, { status: 'failed', message: data.error || 'Failed' });
                 }
-            };
 
-            currentEventSource.onerror = (err) => {
-                closeEventSource();
-                hideProgress();
+                // Remove from active jobs after a delay
+                setTimeout(() => removeActiveJob(jobId), 3000);
+            }
+        };
 
-                // Try to fetch result anyway (job might have completed)
-                fetchJobResult(jobId)
-                    .then(resolve)
-                    .catch(() => reject(new Error('Connection lost. Please check job status.')));
-            };
-        });
+        eventSource.onerror = () => {
+            eventSource.close();
+            updateActiveJob(jobId, { status: 'failed', message: 'Connection lost' });
+            setTimeout(() => removeActiveJob(jobId), 3000);
+        };
+
+        return jobId;
 
     } catch (err) {
-        hideProgress();
         throw err;
     }
 }
 
-// Fetch completed job result
-async function fetchJobResult(jobId) {
-    const response = await fetch(`/jobs/${jobId}`);
-    if (!response.ok) {
-        throw new Error('Failed to fetch job result');
+async function viewCompletedJob(jobId) {
+    try {
+        const response = await fetch(`/jobs/${jobId}`);
+        if (!response.ok) throw new Error('Failed to load job');
+
+        const job = await response.json();
+        displayResult(job);
+    } catch (err) {
+        showError(err.message);
     }
-    return response.json();
 }
 
-// Handle synchronous transformation (original behavior)
-async function handleSyncTransformation(formData, endpoint) {
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        body: formData
-    });
-
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Transformation failed');
-    }
-
-    return response.json();
-}
+// ============================================================================
+// Form Submission
+// ============================================================================
 
 document.getElementById('transformForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const submitBtn = document.getElementById('submitBtn');
-    const loading = document.getElementById('loading');
     const error = document.getElementById('error');
-    const results = document.getElementById('results');
-
-    submitBtn.disabled = true;
-    loading.classList.add('visible');
     error.classList.remove('visible');
-    results.classList.remove('visible');
-    hideProgress();
 
     try {
         const formData = new FormData();
@@ -366,8 +336,6 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
         formData.append('new_document', newDocument);
 
         let endpoint;
-        let useAsync = false;
-        const filesToCheck = [newDocument];
 
         if (currentMode === 'single') {
             const exampleInput = document.querySelector('#singleExampleCard input[name="example_input"]').files[0];
@@ -379,13 +347,10 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
 
             formData.append('example_input', exampleInput);
             formData.append('example_output', exampleOutput);
-            filesToCheck.push(exampleInput, exampleOutput);
-
-            // Determine endpoint based on file size
-            useAsync = shouldUseAsync(filesToCheck);
-            endpoint = useAsync ? '/transform-async' : '/transform';
+            endpoint = '/transform-async';
 
         } else {
+            // Multi-example mode - use sync endpoint for now
             endpoint = '/transform-multi';
             const inputs = document.querySelectorAll('#multiExampleCard input[name="example_inputs"]');
             const outputs = document.querySelectorAll('#multiExampleCard input[name="example_outputs"]');
@@ -395,7 +360,6 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
                 if (input.files[0] && outputs[i]?.files[0]) {
                     formData.append('example_inputs', input.files[0]);
                     formData.append('example_outputs', outputs[i].files[0]);
-                    filesToCheck.push(input.files[0], outputs[i].files[0]);
                     hasValidPair = true;
                 }
             });
@@ -404,66 +368,86 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
                 throw new Error('Please provide at least one complete example pair');
             }
 
-            // Multi-example doesn't have async endpoint yet, use sync
-            useAsync = false;
+            // Multi-example uses sync - display result directly
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Transformation failed');
+            }
+
+            const result = await response.json();
+            displayResult(result);
+            loadHistory();
+            return;
         }
 
-        let result;
-        if (useAsync) {
-            result = await handleAsyncTransformation(formData, endpoint);
-        } else {
-            result = await handleSyncTransformation(formData, endpoint);
-        }
+        // Single example mode - use async for parallel processing
+        await startAsyncTransformation(formData, endpoint, newDocument.name);
 
-        lastResult = result;
-
-        // Display job ID
-        document.getElementById('jobId').textContent = result.job_id;
-
-        document.getElementById('analysis').textContent = result.transformation_analysis;
-        document.getElementById('transformed').textContent = result.transformed_document;
-
-        const metadata = result.metadata;
-        document.getElementById('metadata').innerHTML = `
-            <div class="metadata-item">Type: <span>${metadata.transformation_type}</span></div>
-            <div class="metadata-item">Input Length: <span>${metadata.input_length.toLocaleString()}</span></div>
-            <div class="metadata-item">Output Length: <span>${metadata.output_length.toLocaleString()}</span></div>
-            ${metadata.chunks_processed > 1 ? `<div class="metadata-item">Chunks: <span>${metadata.chunks_processed}</span></div>` : ''}
-            ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
-            ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
-        `;
-
-        // Reset to result view and update comparison if diff data available
-        setResultView('result');
-
-        // Show/hide comparison toggle based on diff data availability
-        const viewToggle = document.getElementById('viewToggle');
-        if (result.diff_data && result.original_document) {
-            viewToggle.style.display = 'flex';
-        } else {
-            viewToggle.style.display = 'none';
-        }
-
-        results.classList.add('visible');
-        results.scrollIntoView({ behavior: 'smooth' });
-
-        // Refresh history
-        loadHistory();
+        // Clear the form for next upload
+        document.getElementById('transformForm').reset();
+        setMode(currentMode); // Re-apply mode to fix required attributes
 
     } catch (err) {
-        error.textContent = err.message;
-        error.classList.add('visible');
-    } finally {
-        submitBtn.disabled = false;
-        loading.classList.remove('visible');
-        hideProgress();
+        showError(err.message);
     }
 });
+
+// ============================================================================
+// Display Results
+// ============================================================================
+
+function displayResult(result) {
+    lastResult = result;
+
+    document.getElementById('jobId').textContent = result.job_id;
+    document.getElementById('analysis').textContent = result.transformation_analysis;
+
+    // Populate Before/After tabs
+    document.getElementById('beforeContent').textContent = result.original_document || '';
+    document.getElementById('afterContent').textContent = result.transformed_document || '';
+
+    // Update diff stats
+    updateDiffStats(result.diff_data);
+
+    const metadata = result.metadata;
+    document.getElementById('metadata').innerHTML = `
+        <div class="metadata-item">Type: <span>${metadata.transformation_type}</span></div>
+        <div class="metadata-item">Input Length: <span>${metadata.input_length.toLocaleString()}</span></div>
+        <div class="metadata-item">Output Length: <span>${metadata.output_length.toLocaleString()}</span></div>
+        ${metadata.chunks_processed > 1 ? `<div class="metadata-item">Chunks: <span>${metadata.chunks_processed}</span></div>` : ''}
+        ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
+        ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
+    `;
+
+    // Reset to "before" tab and show results
+    setDocumentTab('before');
+
+    const results = document.getElementById('results');
+    results.classList.add('visible');
+    results.scrollIntoView({ behavior: 'smooth' });
+
+    // Refresh history
+    loadHistory();
+}
+
+function showError(message) {
+    const error = document.getElementById('error');
+    error.textContent = message;
+    error.classList.add('visible');
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
 
 function copyToClipboard(elementId) {
     const text = document.getElementById(elementId).textContent;
     navigator.clipboard.writeText(text).then(() => {
-        // Show brief feedback
         const btn = event.target;
         const originalText = btn.textContent;
         btn.textContent = 'Copied!';
@@ -484,6 +468,10 @@ function downloadResult() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
+
+// ============================================================================
+// History
+// ============================================================================
 
 async function loadHistory() {
     const historyList = document.getElementById('historyList');
@@ -519,7 +507,6 @@ async function loadHistory() {
 }
 
 async function viewJob(jobId) {
-    const results = document.getElementById('results');
     const error = document.getElementById('error');
 
     try {
@@ -527,53 +514,24 @@ async function viewJob(jobId) {
         if (!response.ok) throw new Error('Failed to load job');
 
         const job = await response.json();
-        lastResult = {
-            job_id: job.job_id,
-            transformation_analysis: job.transformation_analysis,
-            transformed_document: job.transformed_document,
-            original_document: job.original_document,
-            diff_data: job.diff_data,
-            metadata: job.metadata
-        };
-
-        document.getElementById('jobId').textContent = job.job_id;
-        document.getElementById('analysis').textContent = job.transformation_analysis;
-        document.getElementById('transformed').textContent = job.transformed_document;
-
-        const metadata = job.metadata;
-        document.getElementById('metadata').innerHTML = `
-            <div class="metadata-item">Type: <span>${metadata.transformation_type}</span></div>
-            <div class="metadata-item">Input Length: <span>${metadata.input_length.toLocaleString()}</span></div>
-            <div class="metadata-item">Output Length: <span>${metadata.output_length.toLocaleString()}</span></div>
-            ${metadata.chunks_processed > 1 ? `<div class="metadata-item">Chunks: <span>${metadata.chunks_processed}</span></div>` : ''}
-            ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
-            ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
-        `;
-
-        // Reset to result view and update comparison if diff data available
-        setResultView('result');
-
-        // Show/hide comparison toggle based on diff data availability
-        const viewToggle = document.getElementById('viewToggle');
-        if (job.diff_data && job.original_document) {
-            viewToggle.style.display = 'flex';
-        } else {
-            viewToggle.style.display = 'none';
-        }
-
-        error.classList.remove('visible');
-        results.classList.add('visible');
-        results.scrollIntoView({ behavior: 'smooth' });
+        displayResult(job);
 
     } catch (err) {
-        error.textContent = err.message;
-        error.classList.add('visible');
+        showError(err.message);
     }
 }
 
-// Cleanup on page unload
+// ============================================================================
+// Cleanup and Initialization
+// ============================================================================
+
 window.addEventListener('beforeunload', () => {
-    closeEventSource();
+    // Close all active EventSources
+    activeJobs.forEach((job) => {
+        if (job.eventSource) {
+            job.eventSource.close();
+        }
+    });
 });
 
 // Load history on page load
