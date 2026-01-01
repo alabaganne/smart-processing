@@ -79,6 +79,19 @@
             <p>Analyzing transformation pattern and processing document...</p>
         </div>
 
+        <div class="progress-container card" id="progressContainer">
+            <h3>Processing Large Document</h3>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar" id="progressBar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+            <p class="progress-text" id="progressText">Starting...</p>
+            <p class="chunk-info" id="chunkInfo" style="display: none;"></p>
+            <div class="partial-result-wrapper" style="display: none;">
+                <h4>Preview (in progress)</h4>
+                <div class="partial-result" id="partialResult"></div>
+            </div>
+        </div>
+
         <div class="error" id="error"></div>
 
         <div class="results card" id="results">

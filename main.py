@@ -1,18 +1,26 @@
 """
 Smart Document Transformation System
 Uses DSPy and FastAPI to learn document transformation patterns from examples
+
+Features:
+- Background job processing for large documents
+- Real-time progress streaming via Server-Sent Events (SSE)
+- Smart chunking with cross-chunk context preservation
+- Memory-efficient processing for 100+ page documents
 """
 
 import os
 import io
 import json
 import uuid
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import dspy
 from pypdf import PdfReader
@@ -33,6 +41,92 @@ JOBS_DIR = STORAGE_DIR / "jobs"
 # Create storage directories
 for dir_path in [UPLOADS_DIR, OUTPUTS_DIR, JOBS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
+
+# ============================================================================
+# Background Job Processing Infrastructure
+# ============================================================================
+
+# Thread pool for running blocking DSPy operations
+executor = ThreadPoolExecutor(max_workers=4)
+
+# In-memory job status tracking (for real-time updates)
+# Note: In production, use Redis or a database for persistence across restarts
+job_status_store: dict[str, dict] = {}
+
+
+class JobStatus:
+    """Job status constants."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+def init_job_status(job_id: str, total_chunks: int = 1) -> dict:
+    """Initialize job status tracking."""
+    status = {
+        "job_id": job_id,
+        "status": JobStatus.PENDING,
+        "progress": 0,
+        "current_chunk": 0,
+        "total_chunks": total_chunks,
+        "message": "Job queued for processing",
+        "started_at": None,
+        "completed_at": None,
+        "error": None,
+        "partial_result": "",
+        "analysis": ""
+    }
+    job_status_store[job_id] = status
+    return status
+
+
+def update_job_status(
+    job_id: str,
+    status: Optional[str] = None,
+    progress: Optional[int] = None,
+    current_chunk: Optional[int] = None,
+    message: Optional[str] = None,
+    partial_result: Optional[str] = None,
+    analysis: Optional[str] = None,
+    error: Optional[str] = None
+):
+    """Update job status with new values."""
+    if job_id not in job_status_store:
+        return
+
+    job = job_status_store[job_id]
+
+    if status is not None:
+        job["status"] = status
+        if status == JobStatus.PROCESSING and job["started_at"] is None:
+            job["started_at"] = datetime.now().isoformat()
+        elif status in [JobStatus.COMPLETED, JobStatus.FAILED]:
+            job["completed_at"] = datetime.now().isoformat()
+
+    if progress is not None:
+        job["progress"] = progress
+
+    if current_chunk is not None:
+        job["current_chunk"] = current_chunk
+
+    if message is not None:
+        job["message"] = message
+
+    if partial_result is not None:
+        job["partial_result"] = partial_result
+
+    if analysis is not None:
+        job["analysis"] = analysis
+
+    if error is not None:
+        job["error"] = error
+
+
+def get_job_status(job_id: str) -> Optional[dict]:
+    """Get current job status."""
+    return job_status_store.get(job_id)
+
 
 # ============================================================================
 # Configuration
@@ -408,6 +502,65 @@ class MultiExampleTransformer(dspy.Module):
         return result
 
 
+# ============================================================================
+# Context-Aware Transformation for Large Documents
+# ============================================================================
+
+class ContextAwareTransformation(dspy.Signature):
+    """Transform a document chunk while maintaining context from previous chunks."""
+
+    example_input: str = dspy.InputField(
+        desc="Original document BEFORE transformation"
+    )
+    example_output: str = dspy.InputField(
+        desc="Document AFTER transformation - the target format/style"
+    )
+    previous_context: str = dspy.InputField(
+        desc="Summary of what was transformed in previous chunks (empty for first chunk)"
+    )
+    current_chunk: str = dspy.InputField(
+        desc="Current chunk of the document to transform"
+    )
+    chunk_info: str = dspy.InputField(
+        desc="Information about chunk position (e.g., 'Chunk 2 of 5')"
+    )
+
+    transformation_analysis: str = dspy.OutputField(
+        desc="Analysis of transformation applied to this chunk"
+    )
+    transformed_chunk: str = dspy.OutputField(
+        desc="The transformed chunk following the same pattern as the example"
+    )
+    context_summary: str = dspy.OutputField(
+        desc="Brief summary of key elements transformed in this chunk (for next chunk's context)"
+    )
+
+
+class ContextAwareTransformer(dspy.Module):
+    """DSPy module that maintains context across chunks for large documents."""
+
+    def __init__(self):
+        super().__init__()
+        self.transform = dspy.ChainOfThought(ContextAwareTransformation)
+
+    def forward(
+        self,
+        example_input: str,
+        example_output: str,
+        previous_context: str,
+        current_chunk: str,
+        chunk_info: str
+    ):
+        result = self.transform(
+            example_input=example_input,
+            example_output=example_output,
+            previous_context=previous_context,
+            current_chunk=current_chunk,
+            chunk_info=chunk_info
+        )
+        return result
+
+
 def detect_transformation_type(input_text: str, output_text: str) -> str:
     """Detect the type of transformation based on input/output characteristics."""
     input_len = len(input_text)
@@ -499,9 +652,10 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-# Global transformer instance
+# Global transformer instances
 transformer: Optional[SmartDocumentTransformer] = None
 multi_transformer: Optional[MultiExampleTransformer] = None
+context_aware_transformer: Optional[ContextAwareTransformer] = None
 
 
 def get_transformer() -> SmartDocumentTransformer:
@@ -518,6 +672,14 @@ def get_multi_transformer() -> MultiExampleTransformer:
         configure_dspy()
         multi_transformer = MultiExampleTransformer()
     return multi_transformer
+
+
+def get_context_aware_transformer() -> ContextAwareTransformer:
+    global context_aware_transformer
+    if context_aware_transformer is None:
+        configure_dspy()
+        context_aware_transformer = ContextAwareTransformer()
+    return context_aware_transformer
 
 
 # ============================================================================
@@ -832,6 +994,410 @@ async def download_job_output(job_id: str):
         path=output_file,
         filename=f"transformed_{job_id}.txt",
         media_type="text/plain"
+    )
+
+
+# ============================================================================
+# Background Processing Functions
+# ============================================================================
+
+def process_transformation_sync(
+    job_id: str,
+    example_input_text: str,
+    example_output_text: str,
+    new_document_text: str,
+    transformation_type: str,
+    file_metadata: dict
+):
+    """
+    Synchronous transformation processing that runs in a thread pool.
+    Uses context-aware chunking for large documents.
+    """
+    try:
+        # Truncate examples for API calls
+        example_input_for_api = truncate_for_context(example_input_text, max_chars=8000)
+        example_output_for_api = truncate_for_context(example_output_text, max_chars=8000)
+
+        # Chunk the document
+        chunks = chunk_text(new_document_text)
+        total_chunks = len(chunks)
+
+        update_job_status(
+            job_id,
+            status=JobStatus.PROCESSING,
+            total_chunks=total_chunks,
+            message=f"Starting transformation ({total_chunks} chunk{'s' if total_chunks > 1 else ''})"
+        )
+
+        if total_chunks == 1:
+            # Single chunk - use standard transformer
+            update_job_status(
+                job_id,
+                current_chunk=1,
+                progress=10,
+                message="Processing document..."
+            )
+
+            trans = get_transformer()
+            result = trans.forward(
+                example_input=example_input_for_api,
+                example_output=example_output_for_api,
+                new_document=new_document_text
+            )
+
+            transformed_text = result.transformed_document
+            analysis = result.transformation_analysis
+
+            update_job_status(
+                job_id,
+                progress=100,
+                partial_result=transformed_text,
+                analysis=analysis,
+                message="Transformation complete"
+            )
+
+        else:
+            # Multiple chunks - use context-aware transformer
+            trans = get_context_aware_transformer()
+            transformed_parts = []
+            full_analysis = []
+            previous_context = ""
+
+            for i, chunk in enumerate(chunks):
+                chunk_num = i + 1
+                progress = int((chunk_num / total_chunks) * 100)
+
+                update_job_status(
+                    job_id,
+                    current_chunk=chunk_num,
+                    progress=max(5, progress - 5),  # Leave room for completion
+                    message=f"Processing chunk {chunk_num} of {total_chunks}..."
+                )
+
+                result = trans.forward(
+                    example_input=example_input_for_api,
+                    example_output=example_output_for_api,
+                    previous_context=previous_context,
+                    current_chunk=chunk,
+                    chunk_info=f"Chunk {chunk_num} of {total_chunks}"
+                )
+
+                transformed_parts.append(result.transformed_chunk)
+                full_analysis.append(f"[Chunk {chunk_num}] {result.transformation_analysis}")
+
+                # Update context for next chunk
+                previous_context = result.context_summary
+
+                # Update partial result for streaming
+                current_result = "\n\n".join(transformed_parts)
+                update_job_status(
+                    job_id,
+                    partial_result=current_result,
+                    progress=progress
+                )
+
+            transformed_text = "\n\n".join(transformed_parts)
+            analysis = "\n\n".join(full_analysis)
+
+            update_job_status(
+                job_id,
+                progress=100,
+                partial_result=transformed_text,
+                analysis=analysis,
+                message="Transformation complete"
+            )
+
+        # Build metadata
+        metadata = {
+            "input_length": len(new_document_text),
+            "output_length": len(transformed_text),
+            "transformation_type": transformation_type,
+            "chunks_processed": total_chunks,
+            "estimated_tokens_used": estimate_tokens(example_input_for_api) + estimate_tokens(example_output_for_api) + estimate_tokens(new_document_text),
+            "example_truncated": len(example_input_text) > 8000 or len(example_output_text) > 8000,
+            "files": file_metadata,
+            "processing_mode": "context_aware" if total_chunks > 1 else "standard"
+        }
+
+        # Save output and job record
+        save_output(job_id, transformed_text, analysis, metadata)
+        save_job_record(job_id, {
+            "type": "async",
+            "metadata": metadata,
+            "transformation_analysis": analysis
+        })
+
+        update_job_status(
+            job_id,
+            status=JobStatus.COMPLETED,
+            message="Transformation completed successfully"
+        )
+
+    except Exception as e:
+        update_job_status(
+            job_id,
+            status=JobStatus.FAILED,
+            error=str(e),
+            message=f"Transformation failed: {str(e)}"
+        )
+        # Still save a job record for the failure
+        save_job_record(job_id, {
+            "type": "async",
+            "error": str(e),
+            "status": "failed"
+        })
+
+
+async def run_background_transformation(
+    job_id: str,
+    example_input_text: str,
+    example_output_text: str,
+    new_document_text: str,
+    transformation_type: str,
+    file_metadata: dict
+):
+    """Run transformation in thread pool to avoid blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        executor,
+        process_transformation_sync,
+        job_id,
+        example_input_text,
+        example_output_text,
+        new_document_text,
+        transformation_type,
+        file_metadata
+    )
+
+
+# ============================================================================
+# Async Processing Endpoints
+# ============================================================================
+
+@app.post("/transform-async")
+async def transform_document_async(
+    background_tasks: BackgroundTasks,
+    example_input: UploadFile = File(..., description="Example input document (before transformation)"),
+    example_output: UploadFile = File(..., description="Example output document (after transformation)"),
+    new_document: UploadFile = File(..., description="New document to transform")
+):
+    """
+    Start an async document transformation job.
+
+    Returns immediately with a job_id that can be used to:
+    - Poll status via GET /jobs/{job_id}/status
+    - Stream updates via GET /jobs/{job_id}/stream
+
+    Ideal for large documents that would timeout with synchronous processing.
+    """
+    try:
+        # Generate job ID
+        job_id = generate_job_id()
+
+        # Read file contents
+        example_input_bytes = await example_input.read()
+        example_output_bytes = await example_output.read()
+        new_document_bytes = await new_document.read()
+
+        # Save uploaded files
+        save_uploaded_file(example_input_bytes, example_input.filename, job_id, "example_input")
+        save_uploaded_file(example_output_bytes, example_output.filename, job_id, "example_output")
+        save_uploaded_file(new_document_bytes, new_document.filename, job_id, "new_document")
+
+        # Extract text
+        example_input_text = extract_text(example_input.filename, example_input_bytes)
+        example_output_text = extract_text(example_output.filename, example_output_bytes)
+        new_document_text = extract_text(new_document.filename, new_document_bytes)
+
+        if not example_input_text.strip():
+            raise HTTPException(status_code=400, detail="Example input document is empty")
+        if not example_output_text.strip():
+            raise HTTPException(status_code=400, detail="Example output document is empty")
+        if not new_document_text.strip():
+            raise HTTPException(status_code=400, detail="New document is empty")
+
+        # Detect transformation type
+        transformation_type = detect_transformation_type(example_input_text, example_output_text)
+
+        # Estimate chunks for progress tracking
+        chunks = chunk_text(new_document_text)
+        total_chunks = len(chunks)
+
+        # Initialize job status
+        init_job_status(job_id, total_chunks)
+
+        # File metadata
+        file_metadata = {
+            "example_input": example_input.filename,
+            "example_output": example_output.filename,
+            "new_document": new_document.filename
+        }
+
+        # Start background processing
+        background_tasks.add_task(
+            run_background_transformation,
+            job_id,
+            example_input_text,
+            example_output_text,
+            new_document_text,
+            transformation_type,
+            file_metadata
+        )
+
+        return {
+            "job_id": job_id,
+            "status": "pending",
+            "message": f"Job queued for processing ({total_chunks} chunk{'s' if total_chunks > 1 else ''})",
+            "total_chunks": total_chunks,
+            "estimated_document_size": len(new_document_text),
+            "links": {
+                "status": f"/jobs/{job_id}/status",
+                "stream": f"/jobs/{job_id}/stream",
+                "result": f"/jobs/{job_id}"
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start transformation: {str(e)}")
+
+
+@app.get("/jobs/{job_id}/status")
+async def get_job_status_endpoint(job_id: str):
+    """
+    Get the current status of an async transformation job.
+
+    Returns progress information including:
+    - Current status (pending, processing, completed, failed)
+    - Progress percentage
+    - Current chunk being processed
+    - Partial results (if available)
+    """
+    status = get_job_status(job_id)
+
+    if status is None:
+        # Check if job exists in storage but not in memory (e.g., after restart)
+        job = get_job(job_id)
+        if job:
+            return {
+                "job_id": job_id,
+                "status": JobStatus.COMPLETED,
+                "progress": 100,
+                "message": "Job completed (retrieved from storage)",
+                "completed_at": job.get("created_at")
+            }
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return status
+
+
+@app.get("/jobs/{job_id}/stream")
+async def stream_job_updates(job_id: str):
+    """
+    Stream job updates using Server-Sent Events (SSE).
+
+    Provides real-time updates as the transformation progresses.
+    Connect to this endpoint to receive progress updates without polling.
+    """
+    status = get_job_status(job_id)
+
+    if status is None:
+        # Check storage
+        job = get_job(job_id)
+        if job:
+            async def completed_stream():
+                # Send completed event for jobs retrieved from storage
+                output_file = OUTPUTS_DIR / job_id / "transformed_output.txt"
+                transformed_document = ""
+                if output_file.exists():
+                    transformed_document = output_file.read_text(encoding="utf-8")
+
+                event = {
+                    "job_id": job_id,
+                    "status": JobStatus.COMPLETED,
+                    "progress": 100,
+                    "message": "Job completed",
+                    "transformed_document": transformed_document[:1000] + "..." if len(transformed_document) > 1000 else transformed_document
+                }
+                yield f"data: {json.dumps(event)}\n\n"
+
+            return StreamingResponse(
+                completed_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_stream():
+        last_progress = -1
+        last_status = None
+
+        while True:
+            current_status = get_job_status(job_id)
+
+            if current_status is None:
+                break
+
+            # Send update if progress or status changed
+            if current_status["progress"] != last_progress or current_status["status"] != last_status:
+                event = {
+                    "job_id": job_id,
+                    "status": current_status["status"],
+                    "progress": current_status["progress"],
+                    "current_chunk": current_status["current_chunk"],
+                    "total_chunks": current_status["total_chunks"],
+                    "message": current_status["message"]
+                }
+
+                # Include partial result preview for streaming updates
+                if current_status["partial_result"]:
+                    preview = current_status["partial_result"]
+                    if len(preview) > 500:
+                        preview = preview[:500] + "..."
+                    event["partial_result_preview"] = preview
+
+                yield f"data: {json.dumps(event)}\n\n"
+
+                last_progress = current_status["progress"]
+                last_status = current_status["status"]
+
+            # Check if job is complete
+            if current_status["status"] in [JobStatus.COMPLETED, JobStatus.FAILED]:
+                # Send final event with full result or error
+                final_event = {
+                    "job_id": job_id,
+                    "status": current_status["status"],
+                    "progress": 100,
+                    "message": current_status["message"],
+                    "final": True
+                }
+
+                if current_status["status"] == JobStatus.COMPLETED:
+                    final_event["analysis"] = current_status.get("analysis", "")
+                else:
+                    final_event["error"] = current_status.get("error", "Unknown error")
+
+                yield f"data: {json.dumps(final_event)}\n\n"
+                break
+
+            await asyncio.sleep(0.5)  # Poll every 500ms
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
     )
 
 
