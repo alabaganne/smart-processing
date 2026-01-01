@@ -3,132 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Document Transformation</title>
+    <title>Document Transformation</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Smart Document Transformation</h1>
-            <p class="subtitle">Learn transformation patterns from examples and apply them automatically</p>
+            <h1>Document Transformation</h1>
+            <p class="subtitle">Learn patterns from examples, apply automatically</p>
         </header>
 
         <div class="card">
-            <h2>Mode Selection</h2>
+            <h2>Mode</h2>
             <div class="mode-toggle">
-                <button class="mode-btn active" data-mode="single" onclick="setMode('single')">
-                    Single Example
-                </button>
-                <button class="mode-btn" data-mode="multi" onclick="setMode('multi')">
-                    Multiple Examples
-                </button>
+                <button class="mode-btn active" data-mode="single" onclick="setMode('single')">Single Example</button>
+                <button class="mode-btn" data-mode="multi" onclick="setMode('multi')">Multiple Examples</button>
             </div>
-            <p class="info-text">Multiple examples provide better pattern learning for complex transformations.</p>
         </div>
 
         <form id="transformForm">
             <div class="card" id="singleExampleCard">
-                <h2>Training Example</h2>
+                <h2>Example Pair</h2>
                 <div class="file-input-group">
                     <div class="file-input-wrapper">
-                        <label>Example Input (Before)</label>
+                        <label>Before</label>
                         <input type="file" class="file-input" name="example_input" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
                     </div>
                     <div class="file-input-wrapper">
-                        <label>Example Output (After)</label>
+                        <label>After</label>
                         <input type="file" class="file-input" name="example_output" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
                     </div>
                 </div>
-                <p class="info-text">Upload a document pair showing the desired transformation.</p>
             </div>
 
             <div class="card" id="multiExampleCard" style="display: none;">
-                <h2>Training Examples</h2>
+                <h2>Example Pairs</h2>
                 <div class="example-pairs-container" id="examplePairs">
                     <div class="example-pair" data-pair="1">
                         <div class="file-input-group">
                             <div class="file-input-wrapper">
-                                <label>Example Input 1 (Before)</label>
+                                <label>Before</label>
                                 <input type="file" class="file-input" name="example_inputs" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv">
                             </div>
                             <div class="file-input-wrapper">
-                                <label>Example Output 1 (After)</label>
+                                <label>After</label>
                                 <input type="file" class="file-input" name="example_outputs" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv">
                             </div>
                         </div>
                     </div>
                 </div>
-                <button type="button" class="add-pair-btn" onclick="addExamplePair()">+ Add Another Example Pair</button>
-                <p class="info-text">More examples help the system learn better transformation patterns.</p>
+                <button type="button" class="add-pair-btn" onclick="addExamplePair()">+ Add pair</button>
             </div>
 
             <div class="card">
-                <h2>Document to Transform</h2>
+                <h2>Document</h2>
                 <div class="file-input-wrapper">
-                    <label>New Document</label>
+                    <label>File to transform</label>
                     <input type="file" class="file-input" name="new_document" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
                 </div>
-                <p class="info-text">This document will be transformed using the learned pattern.</p>
             </div>
 
-            <button type="submit" class="submit-btn" id="submitBtn">Transform Document</button>
+            <button type="submit" class="submit-btn" id="submitBtn">Transform</button>
         </form>
 
-        <!-- Active Jobs Panel -->
         <div class="card active-jobs-card" id="activeJobsCard" style="display: none;">
-            <h2>
-                Active Jobs
-                <span class="active-jobs-count" id="activeJobsCount">0</span>
-            </h2>
+            <h2>Processing <span class="active-jobs-count" id="activeJobsCount">0</span></h2>
             <div class="active-jobs-list" id="activeJobsList"></div>
         </div>
 
         <div class="error" id="error"></div>
 
         <div class="results card" id="results">
-            <h2>Transformation Results</h2>
-
-            <div class="job-id-banner" id="jobIdBanner">
-                Job ID: <span id="jobId"></span>
-            </div>
+            <h2>Result</h2>
+            <div class="job-id-banner" id="jobIdBanner">ID: <span id="jobId"></span></div>
 
             <div class="result-section">
-                <h3>
-                    Transformation Analysis
-                    <button class="action-btn" onclick="copyToClipboard('analysis')">Copy</button>
-                </h3>
+                <h3>Analysis <button class="action-btn" onclick="copyToClipboard('analysis')">Copy</button></h3>
                 <div class="result-content" id="analysis"></div>
             </div>
 
-            <!-- Before/After Tabs -->
             <div class="document-tabs" id="documentTabs">
                 <div class="tabs-header">
-                    <button class="tab-btn active" data-tab="before" onclick="setDocumentTab('before')">
-                        Before
-                    </button>
-                    <button class="tab-btn" data-tab="after" onclick="setDocumentTab('after')">
-                        After
-                    </button>
-                    <button class="tab-btn" data-tab="changes" onclick="setDocumentTab('changes')">
-                        Changes
-                    </button>
+                    <button class="tab-btn active" data-tab="before" onclick="setDocumentTab('before')">Before</button>
+                    <button class="tab-btn" data-tab="after" onclick="setDocumentTab('after')">After</button>
+                    <button class="tab-btn" data-tab="changes" onclick="setDocumentTab('changes')">Changes</button>
                 </div>
 
                 <div class="diff-stats-bar" id="diffStatsBar"></div>
 
-                <!-- Before Tab -->
                 <div class="tab-content" id="beforeTab">
                     <div class="tab-header">
-                        <h3>Original Document</h3>
+                        <h3>Original</h3>
                         <button class="action-btn" onclick="copyToClipboard('beforeContent')">Copy</button>
                     </div>
                     <div class="result-content" id="beforeContent"></div>
                 </div>
 
-                <!-- After Tab -->
                 <div class="tab-content" id="afterTab" style="display: none;">
                     <div class="tab-header">
-                        <h3>Transformed Document</h3>
+                        <h3>Transformed</h3>
                         <div>
                             <button class="action-btn" onclick="copyToClipboard('afterContent')">Copy</button>
                             <button class="action-btn" onclick="downloadResult()">Download</button>
@@ -137,26 +110,21 @@
                     <div class="result-content" id="afterContent"></div>
                 </div>
 
-                <!-- Changes Tab -->
                 <div class="tab-content" id="changesTab" style="display: none;">
                     <div class="tab-header">
-                        <h3>Changes Highlighted</h3>
+                        <h3>Diff</h3>
                         <span class="diff-legend">
                             <span class="legend-item"><span class="legend-color added"></span> Added</span>
                             <span class="legend-item"><span class="legend-color deleted"></span> Removed</span>
                         </span>
                     </div>
-
-                    <!-- Full Change Notice -->
                     <div class="full-change-notice" id="fullChangeNotice" style="display: none;">
                         <div class="notice-icon">⚡</div>
                         <div class="notice-content">
-                            <h4>Full Document Transformation</h4>
-                            <p>The document was significantly transformed. Use the Before/After tabs to compare.</p>
+                            <h4>Full transformation</h4>
+                            <p>Document was significantly changed. Use Before/After tabs to compare.</p>
                         </div>
                     </div>
-
-                    <!-- Diff View -->
                     <div class="diff-content" id="diffContent"></div>
                 </div>
             </div>
@@ -165,9 +133,9 @@
         </div>
 
         <div class="card" id="historyCard">
-            <h2>Transformation History</h2>
+            <h2>History</h2>
             <div id="historyList" class="history-list">
-                <p class="info-text">Loading history...</p>
+                <p class="info-text">Loading...</p>
             </div>
         </div>
     </div>
