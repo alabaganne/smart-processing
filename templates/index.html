@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Document Transformation</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Smart Document Transformation</h1>
+            <p class="subtitle">Learn transformation patterns from examples and apply them automatically</p>
+        </header>
+
+        <div class="card">
+            <h2>Mode Selection</h2>
+            <div class="mode-toggle">
+                <button class="mode-btn active" data-mode="single" onclick="setMode('single')">
+                    Single Example
+                </button>
+                <button class="mode-btn" data-mode="multi" onclick="setMode('multi')">
+                    Multiple Examples
+                </button>
+            </div>
+            <p class="info-text">Multiple examples provide better pattern learning for complex transformations.</p>
+        </div>
+
+        <form id="transformForm">
+            <div class="card" id="singleExampleCard">
+                <h2>Training Example</h2>
+                <div class="file-input-group">
+                    <div class="file-input-wrapper">
+                        <label>Example Input (Before)</label>
+                        <input type="file" class="file-input" name="example_input" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
+                    </div>
+                    <div class="file-input-wrapper">
+                        <label>Example Output (After)</label>
+                        <input type="file" class="file-input" name="example_output" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
+                    </div>
+                </div>
+                <p class="info-text">Upload a document pair showing the desired transformation.</p>
+            </div>
+
+            <div class="card" id="multiExampleCard" style="display: none;">
+                <h2>Training Examples</h2>
+                <div class="example-pairs-container" id="examplePairs">
+                    <div class="example-pair" data-pair="1">
+                        <div class="file-input-group">
+                            <div class="file-input-wrapper">
+                                <label>Example Input 1 (Before)</label>
+                                <input type="file" class="file-input" name="example_inputs" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv">
+                            </div>
+                            <div class="file-input-wrapper">
+                                <label>Example Output 1 (After)</label>
+                                <input type="file" class="file-input" name="example_outputs" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="add-pair-btn" onclick="addExamplePair()">+ Add Another Example Pair</button>
+                <p class="info-text">More examples help the system learn better transformation patterns.</p>
+            </div>
+
+            <div class="card">
+                <h2>Document to Transform</h2>
+                <div class="file-input-wrapper">
+                    <label>New Document</label>
+                    <input type="file" class="file-input" name="new_document" accept=".pdf,.docx,.txt,.md,.json,.xml,.csv" required>
+                </div>
+                <p class="info-text">This document will be transformed using the learned pattern.</p>
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">Transform Document</button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Analyzing transformation pattern and processing document...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="results card" id="results">
+            <h2>Transformation Results</h2>
+
+            <div class="job-id-banner" id="jobIdBanner">
+                Job ID: <span id="jobId"></span>
+            </div>
+
+            <div class="result-section">
+                <h3>
+                    Transformation Analysis
+                    <button class="action-btn" onclick="copyToClipboard('analysis')">Copy</button>
+                </h3>
+                <div class="result-content" id="analysis"></div>
+            </div>
+
+            <div class="result-section">
+                <h3>
+                    Transformed Document
+                    <div>
+                        <button class="action-btn" onclick="copyToClipboard('transformed')">Copy</button>
+                        <button class="action-btn" onclick="downloadResult()">Download</button>
+                    </div>
+                </h3>
+                <div class="result-content" id="transformed"></div>
+            </div>
+
+            <div class="metadata" id="metadata"></div>
+        </div>
+
+        <div class="card" id="historyCard">
+            <h2>Transformation History</h2>
+            <div id="historyList" class="history-list">
+                <p class="info-text">Loading history...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

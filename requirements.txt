@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+python-dotenv==1.0.1
+dspy-ai==2.5.43
+anthropic==0.40.0
+pypdf==5.1.0
+python-docx==1.1.2
+litellm==1.55.8
