@@ -2,6 +2,7 @@
 // Supports async processing with real-time progress updates via SSE
 
 let currentMode = 'single';
+let currentResultView = 'result';
 let pairCount = 1;
 let lastResult = null;
 let currentEventSource = null;  // Track SSE connection
@@ -51,6 +52,125 @@ function addExamplePair() {
 function removeExamplePair(pairNum) {
     const pair = document.querySelector(`.example-pair[data-pair="${pairNum}"]`);
     if (pair) pair.remove();
+}
+
+// ============================================================================
+// Result View Toggle (Result Only vs Comparison)
+// ============================================================================
+
+function setResultView(view) {
+    currentResultView = view;
+    document.querySelectorAll('.view-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+    });
+
+    const resultOnlyView = document.getElementById('resultOnlyView');
+    const comparisonView = document.getElementById('comparisonView');
+
+    if (view === 'result') {
+        resultOnlyView.style.display = 'block';
+        comparisonView.style.display = 'none';
+    } else {
+        resultOnlyView.style.display = 'none';
+        comparisonView.style.display = 'block';
+        renderComparisonView();
+    }
+}
+
+function renderComparisonView() {
+    if (!lastResult || !lastResult.diff_data) {
+        return;
+    }
+
+    const diffData = lastResult.diff_data;
+    const fullChangeNotice = document.getElementById('fullChangeNotice');
+    const sideBySideView = document.getElementById('sideBySideView');
+    const diffView = document.getElementById('diffView');
+    const diffStats = document.getElementById('diffStats');
+
+    // Show similarity stats
+    const similarityPercent = Math.round(diffData.similarity_ratio * 100);
+    diffStats.innerHTML = `
+        <span class="stat-item">Similarity: <strong>${similarityPercent}%</strong></span>
+    `;
+
+    if (diffData.is_full_change) {
+        // Full document change - show side by side
+        fullChangeNotice.style.display = 'flex';
+        sideBySideView.style.display = 'flex';
+        diffView.style.display = 'none';
+
+        document.getElementById('originalDoc').textContent = lastResult.original_document || '';
+        document.getElementById('transformedDoc').textContent = lastResult.transformed_document || '';
+    } else {
+        // Partial change - show diff with highlighting
+        fullChangeNotice.style.display = 'none';
+        sideBySideView.style.display = 'none';
+        diffView.style.display = 'block';
+
+        // Add stats
+        if (diffData.stats) {
+            diffStats.innerHTML += `
+                <span class="stat-item added">+${diffData.stats.lines_added} added</span>
+                <span class="stat-item deleted">-${diffData.stats.lines_deleted} removed</span>
+                ${diffData.stats.lines_modified > 0 ? `<span class="stat-item modified">~${diffData.stats.lines_modified} modified</span>` : ''}
+            `;
+        }
+
+        // Render the diff
+        renderLineDiff(diffData.line_diff);
+    }
+}
+
+function renderLineDiff(lineDiff) {
+    const diffContent = document.getElementById('diffContent');
+    if (!lineDiff || lineDiff.length === 0) {
+        diffContent.innerHTML = '<p class="no-diff">No changes detected</p>';
+        return;
+    }
+
+    let html = '<div class="diff-lines">';
+
+    for (const op of lineDiff) {
+        switch (op.type) {
+            case 'equal':
+                html += `<div class="diff-line equal"><span class="line-marker"> </span><span class="line-content">${escapeHtml(op.content)}</span></div>`;
+                break;
+
+            case 'insert':
+                html += `<div class="diff-line insert"><span class="line-marker">+</span><span class="line-content">${escapeHtml(op.content)}</span></div>`;
+                break;
+
+            case 'delete':
+                html += `<div class="diff-line delete"><span class="line-marker">-</span><span class="line-content">${escapeHtml(op.content)}</span></div>`;
+                break;
+
+            case 'replace':
+                // Show old lines as deleted
+                if (op.old && Array.isArray(op.old)) {
+                    for (const line of op.old) {
+                        html += `<div class="diff-line delete"><span class="line-marker">-</span><span class="line-content">${escapeHtml(line)}</span></div>`;
+                    }
+                }
+                // Show new lines as inserted
+                if (op.new && Array.isArray(op.new)) {
+                    for (const line of op.new) {
+                        html += `<div class="diff-line insert"><span class="line-marker">+</span><span class="line-content">${escapeHtml(line)}</span></div>`;
+                    }
+                }
+                break;
+        }
+    }
+
+    html += '</div>';
+    diffContent.innerHTML = html;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Progress UI functions
@@ -313,6 +433,17 @@ document.getElementById('transformForm').addEventListener('submit', async (e) =>
             ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
         `;
 
+        // Reset to result view and update comparison if diff data available
+        setResultView('result');
+
+        // Show/hide comparison toggle based on diff data availability
+        const viewToggle = document.getElementById('viewToggle');
+        if (result.diff_data && result.original_document) {
+            viewToggle.style.display = 'flex';
+        } else {
+            viewToggle.style.display = 'none';
+        }
+
         results.classList.add('visible');
         results.scrollIntoView({ behavior: 'smooth' });
 
@@ -400,6 +531,8 @@ async function viewJob(jobId) {
             job_id: job.job_id,
             transformation_analysis: job.transformation_analysis,
             transformed_document: job.transformed_document,
+            original_document: job.original_document,
+            diff_data: job.diff_data,
             metadata: job.metadata
         };
 
@@ -416,6 +549,17 @@ async function viewJob(jobId) {
             ${metadata.example_pairs_used ? `<div class="metadata-item">Examples Used: <span>${metadata.example_pairs_used}</span></div>` : ''}
             ${metadata.processing_mode ? `<div class="metadata-item">Mode: <span>${metadata.processing_mode}</span></div>` : ''}
         `;
+
+        // Reset to result view and update comparison if diff data available
+        setResultView('result');
+
+        // Show/hide comparison toggle based on diff data availability
+        const viewToggle = document.getElementById('viewToggle');
+        if (job.diff_data && job.original_document) {
+            viewToggle.style.display = 'flex';
+        } else {
+            viewToggle.style.display = 'none';
+        }
 
         error.classList.remove('visible');
         results.classList.add('visible');

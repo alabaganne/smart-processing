@@ -14,6 +14,7 @@ import io
 import json
 import uuid
 import asyncio
+import difflib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -429,6 +430,200 @@ def get_job(job_id: str) -> Optional[dict]:
 
 
 # ============================================================================
+# Document Diff and Comparison Utilities
+# ============================================================================
+
+def compute_similarity_ratio(original: str, transformed: str) -> float:
+    """
+    Compute similarity ratio between original and transformed text.
+    Returns a value between 0 (completely different) and 1 (identical).
+    """
+    if not original or not transformed:
+        return 0.0
+    return difflib.SequenceMatcher(None, original, transformed).ratio()
+
+
+def is_full_document_change(original: str, transformed: str, threshold: float = 0.3) -> bool:
+    """
+    Determine if the transformation represents a full document change
+    where showing a diff wouldn't be useful.
+
+    Criteria for full document change:
+    - Similarity ratio below threshold (default 30%)
+    - Significant length difference (summarization or expansion)
+    - Complete restructuring of content
+    """
+    if not original or not transformed:
+        return True
+
+    # Check similarity ratio
+    similarity = compute_similarity_ratio(original, transformed)
+    if similarity < threshold:
+        return True
+
+    # Check for significant length changes (summarization or expansion)
+    len_ratio = len(transformed) / len(original) if len(original) > 0 else 0
+    if len_ratio < 0.25 or len_ratio > 4.0:
+        return True
+
+    return False
+
+
+def compute_line_diff(original: str, transformed: str) -> list[dict]:
+    """
+    Compute line-by-line diff between original and transformed text.
+
+    Returns a list of diff operations:
+    - {"type": "equal", "content": "..."}
+    - {"type": "insert", "content": "..."}
+    - {"type": "delete", "content": "..."}
+    - {"type": "replace", "old": "...", "new": "..."}
+    """
+    original_lines = original.splitlines(keepends=True)
+    transformed_lines = transformed.splitlines(keepends=True)
+
+    differ = difflib.SequenceMatcher(None, original_lines, transformed_lines)
+    diff_ops = []
+
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':
+            for line in original_lines[i1:i2]:
+                diff_ops.append({
+                    "type": "equal",
+                    "content": line.rstrip('\n\r')
+                })
+        elif tag == 'delete':
+            for line in original_lines[i1:i2]:
+                diff_ops.append({
+                    "type": "delete",
+                    "content": line.rstrip('\n\r')
+                })
+        elif tag == 'insert':
+            for line in transformed_lines[j1:j2]:
+                diff_ops.append({
+                    "type": "insert",
+                    "content": line.rstrip('\n\r')
+                })
+        elif tag == 'replace':
+            # Group replacements together
+            old_lines = [l.rstrip('\n\r') for l in original_lines[i1:i2]]
+            new_lines = [l.rstrip('\n\r') for l in transformed_lines[j1:j2]]
+            diff_ops.append({
+                "type": "replace",
+                "old": old_lines,
+                "new": new_lines
+            })
+
+    return diff_ops
+
+
+def compute_word_diff(original: str, transformed: str) -> list[dict]:
+    """
+    Compute word-level diff for more granular change highlighting.
+    Useful for smaller changes within lines.
+
+    Returns a list of diff segments:
+    - {"type": "equal", "text": "..."}
+    - {"type": "insert", "text": "..."}
+    - {"type": "delete", "text": "..."}
+    """
+    # Split into words while preserving whitespace
+    import re
+
+    def tokenize(text):
+        # Split on word boundaries, keeping whitespace
+        return re.findall(r'\S+|\s+', text)
+
+    original_tokens = tokenize(original)
+    transformed_tokens = tokenize(transformed)
+
+    differ = difflib.SequenceMatcher(None, original_tokens, transformed_tokens)
+    diff_segments = []
+
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':
+            diff_segments.append({
+                "type": "equal",
+                "text": ''.join(original_tokens[i1:i2])
+            })
+        elif tag == 'delete':
+            diff_segments.append({
+                "type": "delete",
+                "text": ''.join(original_tokens[i1:i2])
+            })
+        elif tag == 'insert':
+            diff_segments.append({
+                "type": "insert",
+                "text": ''.join(transformed_tokens[j1:j2])
+            })
+        elif tag == 'replace':
+            diff_segments.append({
+                "type": "delete",
+                "text": ''.join(original_tokens[i1:i2])
+            })
+            diff_segments.append({
+                "type": "insert",
+                "text": ''.join(transformed_tokens[j1:j2])
+            })
+
+    return diff_segments
+
+
+def generate_diff_data(original: str, transformed: str) -> dict:
+    """
+    Generate comprehensive diff data for frontend visualization.
+
+    Returns:
+    {
+        "is_full_change": bool,
+        "similarity_ratio": float,
+        "original_text": str,
+        "line_diff": [...],  # Only if not full change
+        "stats": {
+            "lines_added": int,
+            "lines_deleted": int,
+            "lines_modified": int,
+            "lines_unchanged": int
+        }
+    }
+    """
+    similarity = compute_similarity_ratio(original, transformed)
+    full_change = is_full_document_change(original, transformed)
+
+    result = {
+        "is_full_change": full_change,
+        "similarity_ratio": round(similarity, 3),
+        "original_text": original
+    }
+
+    if not full_change:
+        line_diff = compute_line_diff(original, transformed)
+        result["line_diff"] = line_diff
+
+        # Compute stats
+        stats = {
+            "lines_added": 0,
+            "lines_deleted": 0,
+            "lines_modified": 0,
+            "lines_unchanged": 0
+        }
+
+        for op in line_diff:
+            if op["type"] == "equal":
+                stats["lines_unchanged"] += 1
+            elif op["type"] == "insert":
+                stats["lines_added"] += 1
+            elif op["type"] == "delete":
+                stats["lines_deleted"] += 1
+            elif op["type"] == "replace":
+                stats["lines_modified"] += max(len(op.get("old", [])), len(op.get("new", [])))
+
+        result["stats"] = stats
+
+    return result
+
+
+# ============================================================================
 # DSPy Transformation Module
 # ============================================================================
 
@@ -792,18 +987,24 @@ async def transform_document(
             }
         }
 
+        # Generate diff data for before/after comparison
+        diff_data = generate_diff_data(new_document_text, transformed_text)
+
         # Save output and job record
         save_output(job_id, transformed_text, analysis, metadata)
         save_job_record(job_id, {
             "type": "single",
             "metadata": metadata,
-            "transformation_analysis": analysis
+            "transformation_analysis": analysis,
+            "original_document": new_document_text
         })
 
         return {
             "job_id": job_id,
             "transformation_analysis": analysis,
             "transformed_document": transformed_text,
+            "original_document": new_document_text,
+            "diff_data": diff_data,
             "metadata": metadata
         }
 
@@ -928,18 +1129,24 @@ async def transform_document_multi(
             }
         }
 
+        # Generate diff data for before/after comparison
+        diff_data = generate_diff_data(new_doc_text, transformed_text)
+
         # Save output and job record
         save_output(job_id, transformed_text, analysis, metadata)
         save_job_record(job_id, {
             "type": "multi",
             "metadata": metadata,
-            "transformation_analysis": analysis
+            "transformation_analysis": analysis,
+            "original_document": new_doc_text
         })
 
         return {
             "job_id": job_id,
             "transformation_analysis": analysis,
             "transformed_document": transformed_text,
+            "original_document": new_doc_text,
+            "diff_data": diff_data,
             "metadata": metadata
         }
 
@@ -977,9 +1184,17 @@ async def get_job_details(job_id: str):
     if output_file.exists():
         transformed_document = output_file.read_text(encoding="utf-8")
 
+    # Get original document and generate diff data
+    original_document = job.get("original_document", "")
+    diff_data = None
+    if original_document and transformed_document:
+        diff_data = generate_diff_data(original_document, transformed_document)
+
     return {
         **job,
-        "transformed_document": transformed_document
+        "transformed_document": transformed_document,
+        "original_document": original_document,
+        "diff_data": diff_data
     }
 
 
@@ -1124,7 +1339,8 @@ def process_transformation_sync(
         save_job_record(job_id, {
             "type": "async",
             "metadata": metadata,
-            "transformation_analysis": analysis
+            "transformation_analysis": analysis,
+            "original_document": new_document_text
         })
 
         update_job_status(
