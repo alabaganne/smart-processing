@@ -505,7 +505,247 @@ h1 {
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Responsive adjustments */
+/* ============================================================================
+   View Toggle Styles
+   ============================================================================ */
+
+.view-toggle {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.25rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+}
+
+.view-btn {
+    flex: 1;
+    padding: 0.6rem 1rem;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #a1a1aa;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.view-btn.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.view-btn:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e4e4e7;
+}
+
+/* ============================================================================
+   Comparison View Styles
+   ============================================================================ */
+
+.comparison-view {
+    margin-bottom: 1.5rem;
+}
+
+.comparison-header {
+    margin-bottom: 1rem;
+}
+
+.diff-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.stat-item {
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat-item.added {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+}
+
+.stat-item.deleted {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+}
+
+.stat-item.modified {
+    background: rgba(251, 191, 36, 0.15);
+    border-color: rgba(251, 191, 36, 0.3);
+    color: #fbbf24;
+}
+
+/* Full Change Notice */
+.full-change-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: 10px;
+    margin-bottom: 1rem;
+}
+
+.notice-icon {
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
+.notice-content h4 {
+    color: #fbbf24;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.notice-content p {
+    color: #a1a1aa;
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+/* Side by Side View */
+.side-by-side {
+    display: flex;
+    gap: 1rem;
+}
+
+.side-panel {
+    flex: 1;
+    min-width: 0;
+}
+
+.side-panel h4 {
+    font-size: 0.9rem;
+    color: #a1a1aa;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+.side-content {
+    max-height: 500px;
+}
+
+/* Diff View */
+.diff-view h4 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    color: #a1a1aa;
+    margin-bottom: 0.75rem;
+    font-weight: 500;
+}
+
+.diff-legend {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.75rem;
+    font-weight: 400;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+.legend-color.added {
+    background: rgba(34, 197, 94, 0.3);
+    border: 1px solid rgba(34, 197, 94, 0.5);
+}
+
+.legend-color.deleted {
+    background: rgba(239, 68, 68, 0.3);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+}
+
+.legend-color.modified {
+    background: rgba(251, 191, 36, 0.3);
+    border: 1px solid rgba(251, 191, 36, 0.5);
+}
+
+.diff-content {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 12px;
+    padding: 0.5rem;
+    max-height: 500px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.diff-lines {
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.diff-line {
+    display: flex;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    margin: 1px 0;
+}
+
+.diff-line.equal {
+    color: #a1a1aa;
+}
+
+.diff-line.insert {
+    background: rgba(34, 197, 94, 0.15);
+    border-left: 3px solid #22c55e;
+    color: #86efac;
+}
+
+.diff-line.delete {
+    background: rgba(239, 68, 68, 0.15);
+    border-left: 3px solid #ef4444;
+    color: #fca5a5;
+    text-decoration: line-through;
+    text-decoration-color: rgba(239, 68, 68, 0.5);
+}
+
+.line-marker {
+    width: 20px;
+    flex-shrink: 0;
+    font-weight: bold;
+    color: inherit;
+    opacity: 0.7;
+}
+
+.line-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.no-diff {
+    text-align: center;
+    color: #71717a;
+    padding: 2rem;
+    font-style: italic;
+}
+
+/* ============================================================================
+   Responsive Adjustments
+   ============================================================================ */
+
 @media (max-width: 600px) {
     .container {
         padding: 1rem;
@@ -529,5 +769,23 @@ h1 {
 
     .mode-toggle {
         flex-direction: column;
+    }
+
+    .view-toggle {
+        flex-direction: column;
+    }
+
+    .side-by-side {
+        flex-direction: column;
+    }
+
+    .diff-stats {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .diff-legend {
+        flex-wrap: wrap;
+        gap: 0.5rem;
     }
 }

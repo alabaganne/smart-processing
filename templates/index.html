@@ -109,7 +109,18 @@
                 <div class="result-content" id="analysis"></div>
             </div>
 
-            <div class="result-section">
+            <!-- View Toggle -->
+            <div class="view-toggle" id="viewToggle">
+                <button class="view-btn active" data-view="result" onclick="setResultView('result')">
+                    Result Only
+                </button>
+                <button class="view-btn" data-view="comparison" onclick="setResultView('comparison')">
+                    Compare Changes
+                </button>
+            </div>
+
+            <!-- Result Only View -->
+            <div class="result-section" id="resultOnlyView">
                 <h3>
                     Transformed Document
                     <div>
@@ -118,6 +129,48 @@
                     </div>
                 </h3>
                 <div class="result-content" id="transformed"></div>
+            </div>
+
+            <!-- Comparison View -->
+            <div class="comparison-view" id="comparisonView" style="display: none;">
+                <div class="comparison-header">
+                    <div class="diff-stats" id="diffStats"></div>
+                </div>
+
+                <!-- Full Change Notice -->
+                <div class="full-change-notice" id="fullChangeNotice" style="display: none;">
+                    <div class="notice-icon">⚡</div>
+                    <div class="notice-content">
+                        <h4>Full Document Transformation</h4>
+                        <p>The document was significantly transformed (e.g., summarized, expanded, or restructured).
+                        A line-by-line comparison isn't meaningful for this type of change.</p>
+                    </div>
+                </div>
+
+                <!-- Side by Side View for Full Change -->
+                <div class="side-by-side" id="sideBySideView" style="display: none;">
+                    <div class="side-panel">
+                        <h4>Original Document</h4>
+                        <div class="result-content side-content" id="originalDoc"></div>
+                    </div>
+                    <div class="side-panel">
+                        <h4>Transformed Document</h4>
+                        <div class="result-content side-content" id="transformedDoc"></div>
+                    </div>
+                </div>
+
+                <!-- Diff View for Partial Changes -->
+                <div class="diff-view" id="diffView" style="display: none;">
+                    <h4>
+                        Changes Highlighted
+                        <span class="diff-legend">
+                            <span class="legend-item"><span class="legend-color added"></span> Added</span>
+                            <span class="legend-item"><span class="legend-color deleted"></span> Removed</span>
+                            <span class="legend-item"><span class="legend-color modified"></span> Modified</span>
+                        </span>
+                    </h4>
+                    <div class="diff-content" id="diffContent"></div>
+                </div>
             </div>
 
             <div class="metadata" id="metadata"></div>
